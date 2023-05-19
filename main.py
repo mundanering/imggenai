@@ -4,17 +4,51 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import PIL
+from numpy import save
 from tensorflow.keras import layers
 import time
 from IPython import display
 
-(train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
+train_dataset = tf.keras.utils.image_dataset_from_directory(
+    directory=r'datasets\cats',
+    labels='inferred',
+    label_mode='int',
+    class_names=None,
+    color_mode='rgb',
+    batch_size=128,
+    image_size=(1024, 1024),
+    shuffle=False,
+    seed=None,
+    validation_split=None,
+    subset=None,
+    interpolation='bilinear',
+    follow_links=False,
+    crop_to_aspect_ratio=True,
+)
+
+cat_train_labels = []
+cat_train_images = []
+for images, labels in train_dataset:
+    for i in range(len(images)):
+        cat_train_images.append(images[i])
+        cat_train_labels.append(labels[i])
+
+c_images = np.array(cat_train_images)
+c_images = c_images.reshape(c_images.shape[0], 1024, 1024, )
+c_labels = np.array(cat_train_labels)
+c_labels = c_labels.reshape(c_labels.shape[0], )
+
+train_labels = c_labels
+train_images = c_images
+
+save('./data/images.npy', c_images)
+save('./data/labels.npy', c_labels)
 
 train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
 train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
 
-BUFFER_SIZE = 60000
-BATCH_SIZE = 256
+BUFFER_SIZE = 10000
+BATCH_SIZE = 128
 
 # Batch and shuffle the data
 train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
@@ -50,7 +84,7 @@ generator = make_generator_model()
 noise = tf.random.normal([1, 100])
 generated_image = generator(noise, training=False)
 
-plt.imshow(generated_image[0, :, :, 0], cmap='gray')
+plt.imshow(generated_image[0, :, :, 0])
 
 
 def make_discriminator_model():
@@ -101,10 +135,8 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
 
 EPOCHS = 50
 noise_dim = 100
-num_examples_to_generate = 16
+num_examples_to_generate = 4
 
-# You will reuse this seed overtime (so it's easier)
-# to visualize progress in the animated GIF
 seed = tf.random.normal([num_examples_to_generate, noise_dim])
 
 
@@ -159,7 +191,7 @@ def generate_and_save_images(model, epoch, test_input):
 
     for i in range(predictions.shape[0]):
         plt.subplot(4, 4, i + 1)
-        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
+        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5)
         plt.axis('off')
 
     plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
