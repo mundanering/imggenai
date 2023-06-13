@@ -9,16 +9,16 @@ from tensorflow.keras import layers
 import time
 from IPython import display
 
-imgs = 112
+imgs = 96
 n = 100
 
 train_dataset = tf.keras.utils.image_dataset_from_directory(
-    directory=r'datasets',
+    directory='datasets',
     labels='inferred',
     label_mode='int',
     class_names=['cats'],
     color_mode='grayscale',
-    batch_size=32,
+    batch_size=128,
     image_size=(imgs, imgs),
     shuffle=True,
     seed=None,
@@ -26,7 +26,7 @@ train_dataset = tf.keras.utils.image_dataset_from_directory(
     subset=None,
     interpolation='bilinear',
     follow_links=False,
-    crop_to_aspect_ratio=True,
+    crop_to_aspect_ratio=False,
 )
 
 cat_train_labels = []
@@ -49,8 +49,8 @@ train_images = c_images
 train_images = train_images.reshape(train_images.shape[0], imgs, imgs, 1).astype('float32')
 train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
 
-BUFFER_SIZE = 20000
-BATCH_SIZE = 16
+BUFFER_SIZE = 10000
+BATCH_SIZE = 32
 
 # Batch and shuffle the data
 train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
@@ -58,43 +58,46 @@ train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(7 * 7 * 256, use_bias=False, input_shape=(n,)))
+    model.add(layers.Dense(8 * 8 * 512, use_bias=False, input_shape=(n,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((7, 7, 256)))
-    assert model.output_shape == (None, 7, 7, 256)  # Note: None is the batch size
+    model.add(layers.Reshape((8, 8, 512)))
 
-    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 7, 7, 128)
+    model.add(layers.Conv2DTranspose(256, (3, 3), strides=(3, 3), padding='same', use_bias=False))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', use_bias=False))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 14, 14, 64)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(1, (20, 20), strides=(8, 8), padding='same', use_bias=False, activation='tanh'))
-    assert model.output_shape == (None, 112, 112, 1)
+    model.add(layers.Conv2DTranspose(1, (6, 6), strides=(1, 1), padding='same', use_bias=False, activation='tanh'))
 
     return model
 
 
 generator = make_generator_model()
 
-noise = tf.random.normal([1, n])
-generated_image = generator(noise, training=False)
-
 
 def make_discriminator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Conv2D(64, (20, 20), strides=(8, 8), padding='same',
-                            input_shape=[112, 112, 1]))
+    model.add(layers.Conv2D(128, (6, 6), strides=(2, 2), padding='same', input_shape=[96, 96, 1]))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
-    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(512, (4, 4), strides=(2, 2), padding='same'))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
@@ -105,8 +108,6 @@ def make_discriminator_model():
 
 
 discriminator = make_discriminator_model()
-decision = discriminator(generated_image)
-print(decision)
 
 # This method returns a helper function to compute cross entropy loss
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -123,11 +124,12 @@ def generator_loss(fake_output):
     return cross_entropy(tf.ones_like(fake_output), fake_output)
 
 
-generator_optimizer = tf.keras.optimizers.Adam(1e-4)
-discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
+learning_rate = 1e-4 / 2
+generator_optimizer = tf.keras.optimizers.Adam(learning_rate)
+discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate)
 
 checkpoint_dir = './training_checkpoints'
-checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+checkpoint_prefix = os.path.join(checkpoint_dir, 'ckpt')
 checkpoint = tf.train.Checkpoint(step=tf.Variable(1),
                                  generator_optimizer=generator_optimizer,
                                  discriminator_optimizer=discriminator_optimizer,
@@ -136,9 +138,9 @@ checkpoint = tf.train.Checkpoint(step=tf.Variable(1),
 manager = tf.train.CheckpointManager(checkpoint, './training_checkpoints', max_to_keep=3)
 checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 
-EPOCHS = 3000
+EPOCHS = 10
 noise_dim = n
-num_examples_to_generate = 1
+num_examples_to_generate = 16
 
 seed = tf.random.normal([num_examples_to_generate, noise_dim])
 
@@ -164,25 +166,35 @@ def train_step(images):
     generator_optimizer.apply_gradients(zip(gradients_of_generator, generator.trainable_variables))
     discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
 
+    return gen_loss, disc_loss
+
 
 def train(dataset, epochs):
     for epoch in range(epochs):
         start = time.time()
+        gen_losses = []
+        disc_losses = []
 
         for image_batch in dataset:
-            train_step(image_batch)
+            gen_loss, disc_loss = train_step(image_batch)
+            gen_losses.append(gen_loss)
+            disc_losses.append(disc_loss)
 
-        checkpoint.step.assign_add(1)
-        # Save the model every 10 epochs
-        if (checkpoint.step + 1) % 10 == 0:
+        avg_gen_loss = tf.reduce_mean(gen_losses)
+        avg_disc_loss = tf.reduce_mean(disc_losses)
+
+        print('Time for epoch {} is {} sec'.format(checkpoint.step + 0, time.time() - start))
+        print('Generator Loss: {}, Discriminator Loss: {}'.format(avg_gen_loss, avg_disc_loss))
+        print('---------------------------------------')
+
+        if checkpoint.step % 10 == 0:
             checkpoint.save(file_prefix=checkpoint_prefix)
 
-        print('Time for epoch {} is {} sec'.format(checkpoint.step + 1, time.time() - start))
+        checkpoint.step.assign_add(1)
 
     # Generate after the final epoch
     display.clear_output(wait=True)
-    generate_and_save_images(generator,
-                             seed)
+    generate_and_save_images(generator, seed)
 
 
 def generate_and_save_images(model, test_input):
@@ -193,10 +205,11 @@ def generate_and_save_images(model, test_input):
     fig = plt.figure(figsize=(4, 4))
 
     for i in range(predictions.shape[0]):
-        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='nipy_spectral')
+        plt.subplot(4, 4, i+1)
+        plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
         plt.axis('off')
 
-    plt.savefig('image_at_epoch_{:04d}.png'.format(int(checkpoint.step)))
+    plt.savefig('image_at_epoch_{:04d}.png'.format(checkpoint.step - 1))
     plt.show()
 
 
